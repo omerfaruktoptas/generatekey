@@ -2,19 +2,22 @@
 # wordlist_blocks_case_prompt_with_progress.py
 # Blok bazlı wordlist üretici. Kullanıcıya büyük/küçük harf varyantı isteyip istemediğini sorar.
 # Üretim sırasında dosya boyutunu (MB) ve tamamlanma yüzdesini (tahmini) gösterir.
-# NOT: Tahmini tamamlanma oranı token kombinasyonlarına (sıralı dizilim sayısına) dayanmaktadır.
-#      Program benzersiz sonuçlar yazarken bazı kombinasyonlar aynı sonuca yol açarsa
-#      yazılan satır sayısı bu tahminden farklı olabilir. Daha doğru ama bellek-aç gözlü bir
-#      yöntem isterseniz tüm benzersiz sonuçları belleğe alıp sayıp sonra yazdırabiliriz.
 
 import sys
 import itertools
 import os
 import time
+from rich.console import Console
+from rich.prompt import Prompt
+from rich.text import Text
+from rich.panel import Panel
 
 MAX_VARIANTS_PER_TOKEN = 1024  # Güvenlik limiti; gerekirse artırılabilir
 PROGRESS_PRINT_INTERVAL = 0.5  # saniye, ilerleme güncellemeleri arasındaki minimum süre
 PROGRESS_PRINT_LINES = 1000    # veya bu kadar satır yazıldığında zorla güncelle
+
+# Konsol oluşturuluyor
+console = Console()
 
 def read_tokens(prompt):
     raw = input(prompt).strip()
@@ -82,9 +85,12 @@ def format_mb(bytes_count):
     return f"{bytes_count / 1024**2:.3f} MB"
 
 def main():
-    kelimeler = read_tokens("Kelime listesi girin (aralarına boşluk koyun): ")
-    sayilar = read_tokens("Sayı listesi girin (aralarına boşluk koyun): ")
-    ozel_raw = input("Özel karakterler girin (aralarına boşluk koyun, boş bırakabilirsiniz): ").strip()
+    # Başlangıç Mesajı
+    console.print(Panel("Welcome to the GenerateKey Tool", style="bold blue", title="GenerateKey"))
+
+    kelimeler = Prompt.ask("[green]Enter words for the wordlist (separate with commas)[/green]")
+    sayilar = Prompt.ask("[green]Enter the range of numbers (e.g., 1-100)[/green]")
+    ozel_raw = Prompt.ask("[green]Enter any special characters to include (e.g., !@#)[/green]").strip()
     if ozel_raw == "":
         ozel = []
     else:
@@ -95,24 +101,24 @@ def main():
             ozel = parts
 
     try:
-        min_uzunluk = int(input("Şifrenin minimum uzunluğunu girin: "))
-        max_uzunluk = int(input("Şifrenin maksimum uzunluğunu girin: "))
+        min_uzunluk = int(Prompt.ask("[green]Enter minimum password length[/green]"))
+        max_uzunluk = int(Prompt.ask("[green]Enter maximum password length[/green]"))
     except ValueError:
-        print("Uzunluklar sayı olmalı.")
+        console.print("[bold red]Length values must be numbers![/bold red]")
         sys.exit(1)
 
-    cevap = input("Bloklar için tüm büyük/küçük harf varyantları üretilsin mi? (E/h) [h]: ").strip().lower()
-    case_expand = cevap.startswith('e')
+    cevap = Prompt.ask("[green]Should all case variants be generated for the tokens? (Y/N)[/green]", default="N").strip().lower()
+    case_expand = cevap.startswith('y')
 
-    dosya_yolu = input("Dosya kaydetme yolu girin (örn. C:/dosya_yolu/wordlist.txt): ").strip()
+    dosya_yolu = Prompt.ask("[green]Enter the file path to save the wordlist (e.g., C:/path/to/wordlist.txt)[/green]").strip()
     if not dosya_yolu:
-        print("Geçerli bir dosya yolu girin.")
+        console.print("[bold red]Please provide a valid file path.[/bold red]")
         sys.exit(1)
 
-    original_tokens = [t for t in (kelimeler + sayilar + ozel) if t != ""]
+    original_tokens = [t for t in (kelimeler.split(',') + sayilar.split(',') + ozel) if t != ""]
 
     if not original_tokens:
-        print("En az bir token (kelime/sayı/özel) girin.")
+        console.print("[bold red]Please enter at least one token (word/number/special character).[/bold red]")
         sys.exit(1)
 
     expanded_token_list = []
@@ -135,28 +141,24 @@ def main():
             seen_tokens.add(t)
             tokenler.append(t)
 
-    print("Token genişletme bilgisi (orijinal -> varyant sayısı):")
-    for orig, count in expansion_info:
-        print(f"  '{orig}' -> {count} varyant")
-
-    print(f"Toplam token havuzu büyüklüğü (benzersiz varyantlarla): {len(tokenler)}")
+    console.print(f"Total unique token pool size: {len(tokenler)}")
     if case_expand:
-        print(f"Not: MAX_VARIANTS_PER_TOKEN = {MAX_VARIANTS_PER_TOKEN} (aşılırsa fallback uygulanır).")
-    print("Üretim başlıyor... (büyük çıktı olasılığına dikkat)")
+        console.print(f"Note: MAX_VARIANTS_PER_TOKEN = {MAX_VARIANTS_PER_TOKEN} (fallback applied if exceeded).")
+    console.print("[bold cyan]Generating password combinations... Please wait![/bold cyan]")
 
     min_token_len = min(len(t) for t in tokenler)
     if min_token_len == 0:
-        print("Hata: Tokenlerden en az biri boş uzunlukta.")
+        console.print("[bold red]Error: One of the tokens has zero length.[/bold red]")
         sys.exit(1)
 
     # Tahmini toplam "dizilim" sayısını hesapla (sıralı kombinasyon sayısı)
     token_lengths = [len(t) for t in tokenler]
     total_sequences = count_sequence_combinations(token_lengths, min_uzunluk, max_uzunluk)
     if total_sequences == 0:
-        print("Oluşturulabilecek hiçbir kombinasyon yok (min/max uzunluk aralığıyla uyuşmuyor).")
+        console.print("[bold red]No combinations can be generated with the given min/max length range.[/bold red]")
         sys.exit(1)
 
-    print(f"Tahmini dizilim sayısı (sıralı kombinasyonlar): {total_sequences:,} (bu benzersiz sonuç sayısı olmayabilir).")
+    console.print(f"Estimated total sequence count (ordered combinations): {total_sequences:,}")
 
     seen = set()
     written = 0
@@ -164,21 +166,18 @@ def main():
     last_print_time = time.time()
     writes_since_last = 0
 
-    # DFS ile üretim, budama ile
+    # DFS ile üretim
     def dfs(curr_str):
         nonlocal attempted, written, last_print_time, writes_since_last
         curr_len = len(curr_str)
-        # Eğer geçerli uzunluktaysa "deneme" sayısını bir artır ve yaz (benzersizse)
         if min_uzunluk <= curr_len <= max_uzunluk:
             attempted += 1
             if curr_str not in seen and curr_str != "":
                 f.write(curr_str + '\n')
-                # flush az çok anlık f.tell() doğru vermesi için
                 f.flush()
                 seen.add(curr_str)
                 written += 1
                 writes_since_last += 1
-        # Erken dön
         if curr_len >= max_uzunluk:
             return
         for t in tokenler:
@@ -186,20 +185,17 @@ def main():
             if new_len > max_uzunluk:
                 continue
             dfs(curr_str + t)
-            # Agar çok büyük derinlikler varsa arada yazma güncellemesi yapmak için kontrol
             now = time.time()
             if writes_since_last >= PROGRESS_PRINT_LINES or (now - last_print_time) >= PROGRESS_PRINT_INTERVAL:
-                # Dosya boyutunu al (f.tell() çağrıldıktan sonra flush edildiği sürece yeterince doğru)
                 try:
                     bytes_written = f.tell()
                 except Exception:
-                    # güvenlik için os.path.getsize kullan (dosya henüz kaydedilmemişse hata olabilir)
                     try:
                         bytes_written = os.path.getsize(dosya_yolu)
                     except Exception:
                         bytes_written = 0
                 percent = (attempted / total_sequences) * 100 if total_sequences > 0 else 100.0
-                print(f"\rYazılan: {written:,} satır | Dosya: {format_mb(bytes_written)} | Tamamlandı (tahmini): {percent:.2f}% ", end='', flush=True)
+                console.print(f"\rWritten: {written:,} lines | File: {format_mb(bytes_written)} | Completed: {percent:.2f}% ", end='', flush=True)
                 last_print_time = now
                 writes_since_last = 0
 
@@ -207,39 +203,13 @@ def main():
     try:
         with open(dosya_yolu, 'w', encoding='utf-8') as f:
             dfs("")
-            # Son durumu yazdır
-            try:
-                bytes_written = f.tell()
-            except Exception:
-                try:
-                    bytes_written = os.path.getsize(dosya_yolu)
-                except Exception:
-                    bytes_written = 0
+            console.print(f"\nWordlist successfully saved to {dosya_yolu}")
+            final_size = os.path.getsize(dosya_yolu)
+            console.print(f"Total lines (unique): {written:,}")
+            console.print(f"File size: {format_mb(final_size)}")
     except KeyboardInterrupt:
-        print("\nİşlem kullanıcı tarafından durduruldu (KeyboardInterrupt). Geçici sonuçlar dosyada olabilir.")
-        # Son dosya boyutunu dene
-        try:
-            bytes_written = os.path.getsize(dosya_yolu)
-        except Exception:
-            bytes_written = 0
-        percent = (attempted / total_sequences) * 100 if total_sequences > 0 else 100.0
-        print(f"Yazılan: {written:,} satır | Dosya: {format_mb(bytes_written)} | Tamamlandı (tahmini): {percent:.2f}%")
+        console.print("\nProcess interrupted by the user (KeyboardInterrupt). Temporary results may be in the file.")
         sys.exit(1)
-
-    # final print newline to end the \r line
-    percent = (attempted / total_sequences) * 100 if total_sequences > 0 else 100.0
-    print()  # newline after carriage return line
-    print(f"Wordlist başarıyla {dosya_yolu} yoluna kaydedildi.")
-    try:
-        final_size = os.path.getsize(dosya_yolu)
-    except Exception:
-        final_size = 0
-    print(f"Toplam satır (benzersiz): {written:,}")
-    print(f"Dosya boyutu: {format_mb(final_size)}")
-    print(f"Tahmini tamamlanma (% dizilim): {percent:.2f}% (tahmin sıralı kombinasyonlara dayanır; benzersiz satırlar daha az olabilir.)")
-
-    if written == 0:
-        print("Hiç sonuç üretilmedi. Muhtemel sebep: tokenlerin toplam uzunlukları min_uzunluk'un altına düşüyor ve özel karakterler boş olduğundan padding yapılamıyor.")
 
 if __name__ == '__main__':
     main()
