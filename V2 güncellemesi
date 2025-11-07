@@ -1,0 +1,17 @@
+V2 — Wi-Fi Parola Üretici
+
+Küçük, hızlı ve güvenli bir Wi-Fi parola üreticisi.
+
+Açıklama
+
+Yaptığım araştırmalara göre birçok modem hâlâ varsayılan şifrelerle geliyor;
+bu şifreler genellikle 10–12 karakter uzunluğunda oluyor.
+Hazır wordlist’ler daha çok anlamlı kelime ve ifadeler içerdiğinden,
+bu tür rastgele (non-dictionary) şifreleri kırmak zorlaşır.
+Bu sebeple, 10–12 karakter uzunluğunda, büyük ve küçük harf, rakam ve özel karakter içeren rastgele şifreler üreten bir sistem geliştirdim.
+
+Neden bu yaklaşım?
+
+Wordlist tabanlı saldırılar, anlamlı kelime gruplarına odaklı oldukları için rastgele oluşturulmuş şifrelerde başarı şansları düşüktür.
+
+Kural tabanlı (en az bir büyük/küçük/rakam/özel karakter) ve yeterli uzunlukta şifreler, pratikte güvenliği önemli ölçüde artırır.

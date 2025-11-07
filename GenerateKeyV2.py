@@ -10,6 +10,15 @@ import time
 import itertools
 import shutil
 import subprocess
+import random
+import hashlib
+import glob
+
+# Try to import readline for nicer input handling (arrow keys, tab behavior)
+try:
+    import readline  # linux/mac'ta varsayılan, Windows'ta yoksa ImportError olur
+except Exception:
+    readline = None
 
 # ---------------------- Config ----------------------
 MAX_VARIANTS_PER_TOKEN = 1024
@@ -79,12 +88,98 @@ def draw_box(lines, title="", color=C.BRIGHT_BLUE):
     bottom = "└" + "─" * inner_w + "┘"
     print(center(color + bottom + C.RESET))
 
+# Readline initialization to allow filename/directory completion with Tab
+_READLINE_INITIALIZED = False
+
+def _filename_completer(text, state):
+    """
+    Completer that returns filesystem matches (files and directories).
+    Appends a trailing '/' to directory matches to indicate dirs.
+    """
+    try:
+        # Expand user tilde and environment vars
+        expanded = os.path.expanduser(os.path.expandvars(text))
+        # If path ends with a separator, we want to list inside that dir
+        if expanded.endswith(os.path.sep):
+            pattern = expanded + '*'
+        else:
+            pattern = expanded + '*'
+    except Exception:
+        pattern = text + '*'
+    matches = glob.glob(pattern)
+    # If text is empty, show entries in current dir
+    if text == '':
+        matches = glob.glob('*')
+    # Append slash to directories for clarity
+    matches = [m + os.path.sep if os.path.isdir(m) else m for m in matches]
+    matches.sort()
+    try:
+        return matches[state]
+    except IndexError:
+        return None
+
+def _init_readline():
+    """
+    Initialize readline to enable filename completion on Tab and proper
+    arrow-key handling. Ensures '/' is NOT treated as a word delimiter so
+    path segments complete correctly.
+    """
+    global _READLINE_INITIALIZED, readline
+    if _READLINE_INITIALIZED:
+        return
+    if not readline:
+        try:
+            import readline as _r
+            readline = _r
+        except Exception:
+            _READLINE_INITIALIZED = True
+            return
+
+    # Ensure slash is not a delimiter so completion works on path segments
+    try:
+        delims = readline.get_completer_delims()
+        if '/' in delims:
+            new_delims = delims.replace('/', '')
+            readline.set_completer_delims(new_delims)
+    except Exception:
+        pass
+
+    # Install our filename completer
+    try:
+        readline.set_completer(_filename_completer)
+    except Exception:
+        try:
+            # Fallback: try to set an rlcompleter-based completer if available
+            import rlcompleter
+            readline.set_completer(rlcompleter.Completer().complete)
+        except Exception:
+            pass
+
+    # Bind Tab to completion. Different platforms use different bind strings.
+    try:
+        readline.parse_and_bind('tab: complete')
+    except Exception:
+        try:
+            readline.parse_and_bind('bind ^I rl_complete')
+        except Exception:
+            pass
+
+    _READLINE_INITIALIZED = True
+
 def ask(prompt: str, default: str = "") -> str:
+    # ensure readline is initialized so arrow keys and tab behave properly
+    _init_readline()
+
     msg = f"{C.BRIGHT_WHITE}{prompt}{C.RESET}"
     if default:
         msg += f" {C.DIM}[{default}]{C.RESET}"
     msg += f"{C.BRIGHT_CYAN} > {C.RESET}"
-    return input(msg).strip() or default
+    try:
+        return input(msg).strip() or default
+    except KeyboardInterrupt:
+        # Kullanıcı Ctrl-C ile çıkmak isterse temiz bir davranış
+        print()
+        raise
 
 def spinner(text: str, seconds: float = 1.0):
     frames = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
@@ -416,6 +511,156 @@ def generate_wordlist_ui(words, numbers, specials, min_len, max_len, case_expand
     print(center(C.DIM + "Ipuclari: Tokenleri akilli secin, uzunluk araligini dar tutun." + C.RESET))
     print()
 
+# ------------------- WiFi password generator -------------------
+DEFAULT_SPECIALS = "!@#$%&*?-_"
+
+def _truncated_hash64(s: str) -> int:
+    # SHA256, truncate to first 8 bytes -> int
+    h = hashlib.sha256(s.encode("utf-8")).digest()[:8]
+    return int.from_bytes(h, "big")
+
+def _has_triple_repeat(s: str) -> bool:
+    if len(s) < 3:
+        return False
+    # check any char repeated 3 times consecutively
+    for i in range(len(s)-2):
+        if s[i] == s[i+1] == s[i+2]:
+            return True
+    return False
+
+def generate_wifi_passwords_ui():
+    clear()
+    banner()
+    draw_box(
+        [
+            f"WiFi sifresi uretici",
+            "Kurallar:",
+            "- Uzunluk: 10 ile 12 karakter (rastgele secilir)",
+            "- Ozel karakter: en fazla 2 tane (bazilarinda 0 olabilir)",
+            "- Her sifrede en az bir buyuk harf ve bir kucuk harf olacak",
+            "- Aynı karakter 3 defadan fazla yan yana olamaz",
+            "- Benzersiz satırlar olusturulur"
+        ],
+        title="WIFI GENERATOR",
+        color=C.BRIGHT_BLUE
+    )
+
+    try:
+        count = int(ask("Kac satir uretmek istiyorsunuz?", "1000"))
+        if count <= 0:
+            print(center(C.BRIGHT_RED + "Sayi pozitif olmalidir." + C.RESET))
+            time.sleep(1.2)
+            return
+    except ValueError:
+        print(center(C.BRIGHT_RED + "Gecerli bir sayi giriniz." + C.RESET))
+        time.sleep(1.2)
+        return
+
+    if count >= 100000:
+        confirm = ask(f"{count:,} satir uretilecek. Devam etmek istiyor musunuz? (E/h)", "h").strip().lower()
+        if not confirm.startswith("e"):
+            print(center(C.BRIGHT_YELLOW + "Iptal edildi." + C.RESET))
+            time.sleep(1.0)
+            return
+
+    out_path = ask("Kayit yolu", "wifi_wordlist.txt") or "wifi_wordlist.txt"
+
+    specials_raw = ask(f"Ozel karakterler (opsiyonel, default: {DEFAULT_SPECIALS})", DEFAULT_SPECIALS)
+    specials = list(specials_raw.strip()) if specials_raw.strip() else list(DEFAULT_SPECIALS)
+    # dedupe specials
+    specials = list(dict.fromkeys([c for c in specials if not c.isspace()]))
+
+    uppercase = [chr(i) for i in range(ord("A"), ord("Z")+1)]
+    lowercase = [chr(i) for i in range(ord("a"), ord("z")+1)]
+    digits = [str(i) for i in range(10)]
+    pool_others = uppercase + lowercase + digits
+
+    min_len = 10
+    max_len = 12
+
+    written = 0
+    seen_hashes = set()
+    buffer = []
+    BUF_FLUSH = 5000
+    progress_last = time.time()
+    start_time = time.time()
+
+    def print_progress():
+        elapsed = time.time() - start_time
+        rate = written / elapsed if elapsed > 0 else 0.0
+        pct = (written / count) * 100 if count > 0 else 100.0
+        line = f"Yazilan: {written:,} | Dosya: {format_mb(os.path.getsize(out_path) if os.path.exists(out_path) else 0)} | Hedef: {count:,} | %Tamamlandi: {pct:.2f}% | Ortalama/s: {rate:.1f}"
+        print("\r" + center(C.BRIGHT_CYAN + line + C.RESET), end="", flush=True)
+
+    try:
+        with open(out_path, "w", encoding="utf-8") as f:
+            attempts_total = 0
+            # safety: cap attempts to avoid infinite loop if pool impossible
+            max_attempts = max(10 * count, 10_000_000)
+            while written < count and attempts_total < max_attempts:
+                attempts_total += 1
+                length = random.randint(min_len, max_len)
+                # ensure room for at least 1 upper and 1 lower
+                max_specials_allowed = min(2, length - 2)
+                num_specials = random.randint(0, max_specials_allowed) if max_specials_allowed >= 0 else 0
+                # choose positions
+                positions = list(range(length))
+                special_positions = set(random.sample(positions, num_specials)) if num_specials > 0 else set()
+                non_special_positions = [p for p in positions if p not in special_positions]
+                # ensure at least one upper and one lower among non-special positions
+                if len(non_special_positions) < 2:
+                    continue  # try again with different num_specials/length
+                upper_pos = random.choice(non_special_positions)
+                lower_pos = random.choice([p for p in non_special_positions if p != upper_pos])
+                chars = [""] * length
+                for i in range(length):
+                    if i in special_positions:
+                        chars[i] = random.choice(specials)
+                    elif i == upper_pos:
+                        chars[i] = random.choice(uppercase)
+                    elif i == lower_pos:
+                        chars[i] = random.choice(lowercase)
+                    else:
+                        chars[i] = random.choice(pool_others)
+                candidate = "".join(chars)
+                # enforce no triple repeats
+                if _has_triple_repeat(candidate):
+                    continue
+                # compute truncated hash and uniqueness
+                h = _truncated_hash64(candidate)
+                if h in seen_hashes:
+                    continue
+                # accept
+                seen_hashes.add(h)
+                buffer.append(candidate + "\n")
+                written += 1
+                # flush buffer occasionally
+                if len(buffer) >= BUF_FLUSH:
+                    f.write("".join(buffer))
+                    f.flush()
+                    buffer.clear()
+                now = time.time()
+                if (now - progress_last) >= 0.5:
+                    print_progress()
+                    progress_last = now
+            # final flush
+            if buffer:
+                f.write("".join(buffer))
+                f.flush()
+    except KeyboardInterrupt:
+        print()
+        print(center(C.BRIGHT_YELLOW + "Islem kullanici tarafindan durduruldu." + C.RESET))
+        return
+
+    if written < count:
+        print()
+        print(center(C.BRIGHT_YELLOW + f"Uyari: hedefe ulasilamadi. Uretilen: {written:,}" + C.RESET))
+    else:
+        print()
+        print(center(C.BRIGHT_GREEN + f"Tamamlandi: {written:,} satir uretildi -> {out_path}" + C.RESET))
+    print()
+
+# ------------------- Flow: Menu -------------------
 def main_menu():
     while True:
         clear()
@@ -423,7 +668,8 @@ def main_menu():
         draw_box(
             [
                 f"{C.BRIGHT_GREEN}[1]{C.RESET} SpecialWordList (wordlist olustur)",
-                f"{C.BRIGHT_GREEN}[2]{C.RESET} Cikis"
+                f"{C.BRIGHT_GREEN}[2]{C.RESET} WiFi sifresi olustur (random, kurallı)",
+                f"{C.BRIGHT_GREEN}[3]{C.RESET} Cikis"
             ],
             title="MENU",
             color=C.BRIGHT_BLUE
@@ -434,6 +680,9 @@ def main_menu():
             generate_wordlist_ui(*params)
             input(center(C.DIM + "Devam icin Enter'a basin..." + C.RESET))
         elif choice == "2":
+            generate_wifi_passwords_ui()
+            input(center(C.DIM + "Devam icin Enter'a basin..." + C.RESET))
+        elif choice == "3":
             clear()
             banner()
             print(center(C.BRIGHT_GREEN + "Tesekkurler! Gule gule." + C.RESET))
